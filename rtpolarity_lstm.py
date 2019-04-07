@@ -8,17 +8,19 @@
 
 import tensorflow as tf
 from tensorflow import keras
+from keras import regularizers
 from keras.preprocessing.sequence import pad_sequences
 from keras.preprocessing.text import Tokenizer
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold
 from data_helpers import load_data_and_labels
-
-import re
 import numpy as np
+import matplotlib.pyplot as plt
+import re
 import pandas as pd
 from keras.layers.merge import concatenate
 from keras.models import Sequential, Model
-from keras.layers import Dense, Embedding, Activation, merge, Input, Lambda, Reshape
+from keras.layers import Dense, Embedding, BatchNormalization, Activation, merge, Input, Lambda, Reshape
 from keras.layers import Convolution1D, Flatten, Dropout, MaxPool1D, GlobalAveragePooling1D
 from keras.layers import LSTM, GRU, TimeDistributed, Bidirectional
 from keras.utils.np_utils import to_categorical
@@ -30,22 +32,13 @@ from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 
-'''
-def word_to_vec(x_text):
-    vocab = ''
-    for text in x_text:
-        vocab += text.split()
-    model = Word2Vec(vocab, sg=0, size=192, min_count=5, workers=4)
-    model.save(r'./model/rt-polaritydata.word2vec')
-'''
-
 positive_data_file = open(r'./data/rt-polaritydata/rt-polarity.pos', "r", encoding='utf-8')
 negative_data_file = open(r'./data/rt-polaritydata/rt-polarity.neg', "r", encoding='utf-8')
 x_text, y = load_data_and_labels(positive_data_file, negative_data_file)
-X_train, X_test, y_train, y_test = train_test_split(x_text, y, test_size=0.1, random_state=42)
-num_words = len(x_text)
+X_train, X_test, y_train, y_test = train_test_split(x_text, y, test_size=0.2, random_state=42)
+num_entries = len(x_text)
 num_labels = len(y)
-print("training entries: {}, labels: {}".format(num_words, num_labels))
+print("training entries: {}, labels: {}".format(num_entries, num_labels))
 print(X_train[0])
 
 # 分词，构建单词-id词典
@@ -63,36 +56,41 @@ x_train = tokenizer.sequences_to_matrix(X_train_word_ids, mode='binary')
 x_test = tokenizer.sequences_to_matrix(X_test_word_ids, mode='binary')
 
 # 序列模式
-x_train = pad_sequences(X_train_word_ids, maxlen=256)
-x_test = pad_sequences(X_test_word_ids, maxlen=256)
+x_train = pad_sequences(X_train_word_ids, maxlen=64)
+x_test = pad_sequences(X_test_word_ids, maxlen=64)
 
-# 构建模型
+# kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)  # 5折交叉验证
+# cvscores = []
+# for train, test in kfold.split(x_train, y_train):
+
+# 构建LSTM模型
 model = keras.Sequential()
-model.add(keras.layers.Embedding(len(vocab) + 1, 16))
-model.add(keras.layers.GlobalAveragePooling1D())  # 对序列维度求平均，为每个示例返回固定长度的输出向量
-model.add(keras.layers.Dense(16, activation=tf.nn.relu))
-model.add(keras.layers.Dense(1, activation=tf.nn.sigmoid))
+model.add(keras.layers.Embedding(len(vocab) + 1, 128))
+model.add(keras.layers.LSTM(256, dropout=0.5, recurrent_dropout=0.5))
+model.add(keras.layers.Dense(1, activation='sigmoid', kernel_regularizer=regularizers.l2(0.001),
+                             activity_regularizer=regularizers.l1(0.001)))
+# model.add(keras.layers.Dense(1, activation='tanh'))
+# model.add(keras.layers.Dense(1, activation='softmax'))
+# model.add(keras.layers.Dense(1, activation='relu'))
+
 
 # 显示模型的概况
 model.summary()
 
 model.compile(optimizer=keras.optimizers.Adam(),
-              loss='binary_crossentropy',
+              loss='mean_squared_error',
               metrics=['accuracy'])
 
-x_val = x_train[:2000]
-partial_x_train = x_train[2000:]
-
-y_val = y_train[:2000]
-partial_y_train = y_train[2000:]
-
 # 训练
-history = model.fit(partial_x_train, partial_y_train,
+history = model.fit(x_train, y_train, validation_split=0.1,
                     epochs=40,
                     batch_size=256,
-                    validation_data=(x_val, y_val),
                     verbose=1)
 
-model.save('./model/rtpolarity_classify.h5')
-results = model.evaluate(x_test, y_test)
-print(results)
+model.save('./model/rtpolarity-lstm.h5')
+scores = model.evaluate(x_test, y_test)
+print(scores)
+# print("%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
+# cvscores.append(scores[1] * 100)
+
+# print("%.2f%% (+/- %.2f%%)" % (np.mean(cvscores), np.std(cvscores)))
